@@ -114,7 +114,7 @@ def clip_files(files):
             ("fWide", ctypes.wintypes.BOOL),
         )
 
-    if not files:
+    if not len(files):
         return
 
     offset = ctypes.sizeof(DROPFILES)
@@ -174,7 +174,7 @@ def main():
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
 
-    parser.add_argument("--edginess", default=0.5, type=float)
+    parser.add_argument("--edginess", default=0.15, type=float)
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--centroid", type=song_path, default=None)
     parser.add_argument("--dump", action="store_true")
@@ -285,7 +285,7 @@ def main():
         track_order = track_centrality
 
     track_order = track_order[: args.top_k]
-    rng = np.random.random(seed=0)
+    rng = np.random.default_rng(seed=0)
     edginess = args.edginess
     for _ in range(int(edginess * len(r))):
         i = int(rng.random() * (len(r) - 1))

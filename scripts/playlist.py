@@ -28,7 +28,7 @@ def partial_decode(container, duration, num_segments=3, silence=1e-4):
     segments = []
     segment_len = int(tot_samples / num_segments)
     cursor = 0
-    while cursor < container.duration:
+    while cursor < container.duration and len(segments) < num_segments:
         container.seek(cursor)
         segment = list(decode_k_samples(container, audio, segment_len, silence))
         if segment:

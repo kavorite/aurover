@@ -91,8 +91,8 @@ def log_mel_spectrogram(
 
 
 def distance_matrix(points):
-    D = points[:, None, :] - points[None, :, :]
-    D = tf.linalg.norm(D, axis=-1)
+    tf.linalg.l2_normalize(points, axis=-1)
+    D = 1 - points @ np.transpose(points)
     D_min = tf.reduce_min(D, axis=1)
     D = (D - D_min) / (tf.reduce_max(D, axis=1) - D_min)
     return D

@@ -181,6 +181,7 @@ def main():
     parser.add_argument("--edginess", default=0.15, type=float)
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--centroid", type=song_path, action="extend", nargs="*")
+    parser.add_argument("--reduce", action="store_true", default=False)
     parser.add_argument("--dump", action="store_true")
     parser.add_argument("--constellations", default=None, type=int)
     args = parser.parse_args()
@@ -286,6 +287,8 @@ def main():
     sys.stderr.write("computing the path...\n")
     if args.centroid:
         centroids = embeddings[np.isin(tracks, args.centroid)]
+        if args.reduce:
+            centroids = tf.expand_dims(tf.reduce_mean(centroids, axis=0), axis=0)
         order_scores = embeddings - centroids[:, None]
         order_scores = tf.reduce_prod(tf.linalg.norm(order_scores, axis=-1), axis=0)
         track_order = tf.argsort(order_scores)

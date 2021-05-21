@@ -287,9 +287,6 @@ def main():
     if args.centroid:
         centroids = embeddings[np.isin(tracks, args.centroid)]
         order_scores = embeddings - centroids[:, None]
-        order_scores = (order_scores - tf.reduce_min(order_scores)) / (
-            tf.reduce_max(order_scores) - tf.reduce_min(order_scores)
-        )
         order_scores = tf.reduce_prod(tf.linalg.norm(order_scores, axis=-1), axis=0)
         track_order = tf.argsort(order_scores)
         track_order = track_order.numpy()

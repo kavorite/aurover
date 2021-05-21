@@ -1,5 +1,6 @@
 import ctypes
-from os.path import abspath
+import pdb
+from os.path import abspath, dirname
 
 import av
 import numpy as np
@@ -7,8 +8,6 @@ import pythoncom
 import tensorflow as tf
 import win32clipboard
 from resampy import resample
-
-from spectrograms import log_mel_spectrogram
 
 
 def decode_k_samples(container, audio, k, silence=1e-4):
@@ -40,11 +39,14 @@ def partial_decode(container, duration, num_segments=3, silence=1e-4):
     y_max = -np.inf
     y_min = np.inf
     for i, segment in enumerate(segments):
+        if i >= num_segments - 1:
+            break
         if len(segment) > 0:
             y_max = max(y_max, segment.max())
             y_min = min(y_min, segment.min())
-        segment = np.pad(segment, (i * segment_len, 0))
-        segment = np.pad(segment, (0, len(y) - len(segment)))
+        lpad = i * segment_len
+        rpad = max(0, len(y) - len(segment) - lpad)
+        segment = np.pad(segment, (lpad, rpad))
         segment /= num_segments
         y += segment
     target_sr = int(sr / (len(y) / tot_samples) + 0.5)
@@ -166,7 +168,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="./aurover.h5",
+        default=abspath(f"{dirname(__file__)}/aurover.h5"),
         type=tf.keras.models.load_model,
     )
 
@@ -308,8 +310,8 @@ def main():
     tour, cost = solve_tsp_simulated_annealing(A)
     tracks = tracks[track_order[tour]]
     # clip_files(tracks[np.array(tour)])
-    if not sys.stdout.isatty():
-        sys.stdout.write("\n".join(tracks) + "\n")
+    sys.stdout.write("\n".join(tracks) + "\n")
+    sys.stderr.write("copying paths to clipboard...\n")
     clip_files(tracks)
     # if sys.stdout.isatty():
     # sys.stdout.write("\n".join(tracks) + "\n")

@@ -155,7 +155,9 @@ def main():
     def splat_pattern(pattern):
         return glob(pattern, recursive=True)
 
-    parser.add_argument("--tracks", action="extend", type=splat_pattern, nargs="+")
+    parser.add_argument(
+        "--tracks", action="extend", type=splat_pattern, nargs="+", required=True
+    )
     parser.add_argument(
         "--read-duration",
         type=float,

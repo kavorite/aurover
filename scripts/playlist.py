@@ -1,4 +1,5 @@
 import ctypes
+from os.path import abspath
 
 import av
 import numpy as np
@@ -171,6 +172,7 @@ def main():
         try:
             with av.open(path) as container:
                 rate = container.streams.audio[0].rate
+            return abspath(path)
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
 
@@ -182,7 +184,7 @@ def main():
     args = parser.parse_args()
     tracks = []
     for tracklist in args.tracks:
-        tracks.extend(tracklist)
+        tracks.extend(map(abspath, tracklist))
     tracks = np.array(tracks, dtype=object)
     sys.stderr.write("loading audio files...\n")
     with futures.ThreadPoolExecutor(6) as pool:
@@ -280,17 +282,19 @@ def main():
     sys.stderr.write("computing the path...\n")
     if args.centroid:
         centroid = tf.squeeze(embeddings[tracks == args.centroid])
-        track_order = tf.argsort(tf.linalg.norm(embeddings - centroid[:, None]))[::-1]
+        track_order = tf.argsort(tf.linalg.norm(embeddings - centroid, axis=-1))
+        track_order = track_order.numpy()
     else:
         track_order = track_centrality
 
-    track_order = track_order[: args.top_k]
     rng = np.random.default_rng(seed=0)
     edginess = args.edginess
     for _ in range(int(edginess * len(r))):
         i = int(rng.random() * (len(r) - 1))
         j = int(rng.random() * (len(r) - 1))
         track_order[i], track_order[j] = track_order[j], track_order[i]
+
+    track_order = track_order[: args.top_k]
     A = A[track_order][:, track_order]
     tour, cost = solve_tsp_simulated_annealing(A)
     tracks = tracks[track_order[tour]]

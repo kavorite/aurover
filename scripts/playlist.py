@@ -178,7 +178,7 @@ def main():
 
     parser.add_argument("--edginess", default=0.15, type=float)
     parser.add_argument("--top-k", type=int, default=-1)
-    parser.add_argument("--centroid", type=song_path, default=None)
+    parser.add_argument("--centroid", type=song_path, action="extend", nargs="*")
     parser.add_argument("--dump", action="store_true")
     parser.add_argument("--constellations", default=None, type=int)
     args = parser.parse_args()
@@ -221,6 +221,8 @@ def main():
         x = tf.expand_dims(x, axis=-1)
         x = tf.image.grayscale_to_rgb(x)
         return x
+
+    tf.config.run_functions_eagerly(True)
 
     pad_to = max(map(len, ys))
     ys = [np.pad(y, (0, pad_to - len(y))) for y in ys]
@@ -281,8 +283,13 @@ def main():
 
     sys.stderr.write("computing the path...\n")
     if args.centroid:
-        centroid = tf.squeeze(embeddings[tracks == args.centroid])
-        track_order = tf.argsort(tf.linalg.norm(embeddings - centroid, axis=-1))
+        centroids = embeddings[np.isin(tracks, args.centroid)]
+        order_scores = embeddings - centroids[:, None]
+        order_scores = (order_scores - tf.reduce_min(order_scores)) / (
+            tf.reduce_max(order_scores) - tf.reduce_min(order_scores)
+        )
+        order_scores = tf.reduce_prod(tf.linalg.norm(order_scores, axis=-1), axis=0)
+        track_order = tf.argsort(order_scores)
         track_order = track_order.numpy()
     else:
         track_order = track_centrality

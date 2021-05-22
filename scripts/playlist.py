@@ -90,12 +90,16 @@ def log_mel_spectrogram(
     return S
 
 
+def standardize(x, axis=None):
+    x_min = tf.reduce_min(x, axis)
+    x_max = tf.reduce_max(x, axis)
+    return (x - x_min) / (x_max - x_min)
+
+
 def distance_matrix(points):
     points = tf.linalg.l2_normalize(points, axis=-1)
     D = 1 - points @ np.transpose(points)
-    D_min = tf.reduce_min(D, axis=1)
-    D = (D - D_min) / (tf.reduce_max(D, axis=1) - D_min)
-    return D
+    return standardize(D, axis=-1)
 
 
 def pagerank(A, alpha=0.85):
@@ -180,7 +184,7 @@ def main():
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
 
-    parser.add_argument("--edginess", default=0.15, type=float)
+    parser.add_argument("--edginess", default=0.0, type=float)
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--centroid", type=song_path, action="extend", nargs="*")
     parser.add_argument("--reduce", action="store_true", default=False)
@@ -291,7 +295,7 @@ def main():
         centroids = embeddings[np.isin(tracks, args.centroid)]
         if args.reduce:
             centroids = tf.expand_dims(tf.reduce_mean(centroids, axis=0), axis=0)
-        order_scores = embeddings - centroids[:, None]
+        order_scores = embeddings * centroids[:, None]
         order_scores = tf.reduce_prod(tf.linalg.norm(order_scores, axis=-1), axis=0)
         track_order = tf.argsort(order_scores)
         track_order = track_order.numpy()

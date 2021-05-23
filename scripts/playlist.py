@@ -184,7 +184,6 @@ def main():
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
 
-    parser.add_argument("--edginess", default=0.0, type=float)
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--centroid", type=song_path, action="extend", nargs="*")
     parser.add_argument("--reduce", action="store_true", default=False)
@@ -303,15 +302,14 @@ def main():
         track_order = track_centrality
 
     rng = np.random.default_rng(seed=0)
-    edginess = args.edginess
-    for _ in range(int(edginess * len(r))):
-        i = int(rng.random() * (len(r) - 1))
-        j = int(rng.random() * (len(r) - 1))
-        track_order[i], track_order[j] = track_order[j], track_order[i]
-
     track_order = track_order[: args.top_k]
-    A = A[track_order][:, track_order]
-    tour, cost = solve_tsp_simulated_annealing(A)
+    interleaved = np.zeros_like(track_order, dtype=int)
+    from_front = track_order[: track_order // 2]
+    from_back = track_order[: len(track_order) - len(from_front)]
+    interleaved[0::2] = from_front
+    interleaved[1::2] = from_back
+    A = A[interleaved][:, interleaved]
+    tour, total_cost = solve_tsp_simulated_annealing(A)
     tracks = tracks[track_order[tour]]
     # clip_files(tracks[np.array(tour)])
     sys.stdout.write("\n".join(tracks) + "\n")

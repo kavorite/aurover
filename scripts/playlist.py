@@ -1,13 +1,28 @@
 import ctypes
-import pdb
 from os.path import abspath, dirname
 
+import aubio
 import av
 import numpy as np
 import pythoncom
 import tensorflow as tf
 import win32clipboard
 from resampy import resample
+
+
+def detect_bpm(y, sr, beat_detector=None):
+    if beat_detector is None:
+        beat_detector = aubio.tempo(method="specdiff", samplerate=sr)
+    buf_len = beat_detector.hop_size
+    beats = []
+    while len(y) > buf_len:
+        samples = y[:buf_len]
+        is_beat = beat_detector(samples)
+        if is_beat:
+            beats.append(beat_detector.get_last_s())
+        y = y[buf_len + 1 :]
+    bpms = 60 / np.diff(beats)
+    return np.median(bpms)
 
 
 def decode_k_samples(container, audio, k, silence=1e-4):
@@ -228,7 +243,8 @@ def main():
         x = log_mel_spectrogram(y, sr, *image_shape)
         x = tf.expand_dims(x, axis=-1)
         x = tf.image.grayscale_to_rgb(x)
-        return x
+        bpm = detect_bpm(y, sr)
+        return x, bpm
 
     tf.config.run_functions_eagerly(True)
 
@@ -236,10 +252,13 @@ def main():
     ys = [np.pad(y, (0, pad_to - len(y))) for y in ys]
     ys = np.vstack(ys)
     sys.stderr.write("encoding spectrograms...\n")
-    spectrograms = tf.map_fn(
+    spectrograms, bpms = tf.map_fn(
         preprocess,
         (tf.stack(ys), tf.cast(tf.stack(srs), tf.float32)),
-        fn_output_signature=tf.TensorSpec(shape=(*image_shape, 3)),
+        fn_output_signature=(
+            tf.TensorSpec(shape=(*image_shape, 3)),
+            tf.TensorSpec(shape=()),
+        ),
     )
     sys.stderr.write("extracting dense features...\n")
     embeddings = embedder.predict(spectrograms, batch_size=8)
@@ -301,11 +320,10 @@ def main():
     else:
         track_order = track_centrality
 
-    rng = np.random.default_rng(seed=0)
     track_order = track_order[: args.top_k]
     interleaved = np.zeros_like(track_order, dtype=int)
     from_front = track_order[: track_order // 2]
-    from_back = track_order[: len(track_order) - len(from_front)]
+    from_back = track_order[::-1][: len(track_order) - len(from_front)]
     interleaved[0::2] = from_front
     interleaved[1::2] = from_back
     A = A[interleaved][:, interleaved]

@@ -11,13 +11,14 @@ from resampy import resample
 
 
 def detect_bpm(y, sr, beat_detector=None):
+    y = np.array(y).astype(np.float32)
     if beat_detector is None:
-        beat_detector = aubio.tempo(method="specdiff", samplerate=sr)
+        beat_detector = aubio.tempo(method="specdiff", samplerate=int(sr))
     buf_len = beat_detector.hop_size
     beats = []
     while len(y) > buf_len:
         samples = y[:buf_len]
-        is_beat = beat_detector(samples)
+        is_beat = beat_detector(samples).astype(np.float32)
         if is_beat:
             beats.append(beat_detector.get_last_s())
         y = y[buf_len + 1 :]
@@ -111,10 +112,9 @@ def standardize(x, axis=None):
     return (x - x_min) / (x_max - x_min)
 
 
-def distance_matrix(points):
+def pairwise_cos_distance(points):
     points = tf.linalg.l2_normalize(points, axis=-1)
-    D = 1 - points @ np.transpose(points)
-    return standardize(D, axis=-1)
+    return 1 - points @ tf.transpose(points)
 
 
 def pagerank(A, alpha=0.85):
@@ -173,23 +173,17 @@ def main():
     sys.stdout.reconfigure(encoding="utf8")
     parser = ArgumentParser()
 
-    def splat_pattern(pattern):
-        return glob(pattern, recursive=True)
-
     parser.add_argument(
         "--tracks", action="extend", type=splat_pattern, nargs="+", required=True
     )
-    parser.add_argument(
-        "--read-duration",
-        type=float,
-        default=6.0,
-        help="duration of each track to process in seconds",
-    )
-    parser.add_argument(
-        "--model",
-        default=abspath(f"{dirname(__file__)}/aurover.h5"),
-        type=tf.keras.models.load_model,
-    )
+
+    def splat_pattern(pattern):
+        return glob(pattern, recursive=True)
+
+    def positive_real(x):
+        x = float(x)
+        if x <= 0:
+            raise ValueError("This argument must be positive")
 
     def song_path(path):
         try:
@@ -199,11 +193,33 @@ def main():
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
 
+    def sparse_real(x):
+        x = float(x)
+        if not 0 < x < 1.0:
+            raise ValueError("Scale factors must lie on the interval [0, 1]")
+
+    def natural_int(x):
+        x = int(x)
+        if x < 0:
+            raise ValueError("natural numbers must be positive or zero")
+
+    parser.add_argument(
+        "--read-duration",
+        type=positive_real,
+        default=6.0,
+        help="duration of each track to process in seconds",
+    )
+    parser.add_argument(
+        "--model",
+        default=dirname(abspath(__file__)) + "/aurover.h5",
+        type=tf.keras.models.load_model,
+    )
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--centroid", type=song_path, action="extend", nargs="*")
     parser.add_argument("--reduce", action="store_true", default=False)
     parser.add_argument("--dump", action="store_true")
-    parser.add_argument("--constellations", default=None, type=int)
+    parser.add_argument("--constellations", default=None, type=natural_int)
+    parser.add_argument("--max-tempo-penalty", default=1.0, type=sparse_real)
     args = parser.parse_args()
     tracks = []
     for tracklist in args.tracks:
@@ -243,8 +259,7 @@ def main():
         x = log_mel_spectrogram(y, sr, *image_shape)
         x = tf.expand_dims(x, axis=-1)
         x = tf.image.grayscale_to_rgb(x)
-        bpm = detect_bpm(y, sr)
-        return x, bpm
+        return x
 
     tf.config.run_functions_eagerly(True)
 
@@ -252,19 +267,21 @@ def main():
     ys = [np.pad(y, (0, pad_to - len(y))) for y in ys]
     ys = np.vstack(ys)
     sys.stderr.write("encoding spectrograms...\n")
-    spectrograms, bpms = tf.map_fn(
+    spectrograms = tf.map_fn(
         preprocess,
         (tf.stack(ys), tf.cast(tf.stack(srs), tf.float32)),
-        fn_output_signature=(
-            tf.TensorSpec(shape=(*image_shape, 3)),
-            tf.TensorSpec(shape=()),
-        ),
+        fn_output_signature=(tf.TensorSpec(shape=(*image_shape, 3))),
     )
     sys.stderr.write("extracting dense features...\n")
     embeddings = embedder.predict(spectrograms, batch_size=8)
     # A_min = tf.reduce_min(A)
     # A = tf.math.divide_no_nan(A - A_min, tf.reduce_max(A) - A_min)
-    A = distance_matrix(embeddings).numpy()
+    bpms = np.array([detect_bpm(y, sr) for y, sr in zip(ys, srs)], dtype=np.float32)
+    bpm_distance = 1 - standardize(bpms[:, None] - bpms[None, :])
+    bpm_distance = tf.clip_by_value(bpm_distance, args.max_tempo_penalty, 1.0)
+    bpm_distance = tf.cast(bpm_distance, tf.float32)
+    cos_distance = pairwise_cos_distance(embeddings)
+    A = np.array(standardize(bpm_distance * cos_distance))
     r = pagerank(A)
     track_centrality = np.argsort(r)[::-1]
     if args.dump:
@@ -322,7 +339,7 @@ def main():
 
     track_order = track_order[: args.top_k]
     interleaved = np.zeros_like(track_order, dtype=int)
-    from_front = track_order[: track_order // 2]
+    from_front = track_order[: len(track_order) // 2]
     from_back = track_order[::-1][: len(track_order) - len(from_front)]
     interleaved[0::2] = from_front
     interleaved[1::2] = from_back

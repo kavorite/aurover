@@ -173,10 +173,6 @@ def main():
     sys.stdout.reconfigure(encoding="utf8")
     parser = ArgumentParser()
 
-    parser.add_argument(
-        "--tracks", action="extend", type=splat_pattern, nargs="+", required=True
-    )
-
     def splat_pattern(pattern):
         return glob(pattern, recursive=True)
 
@@ -184,11 +180,12 @@ def main():
         x = float(x)
         if x <= 0:
             raise ValueError("This argument must be positive")
+        return x
 
     def song_path(path):
         try:
             with av.open(path) as container:
-                rate = container.streams.audio[0].rate
+                container.streams.audio[0].rate
             return abspath(path)
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
@@ -197,11 +194,17 @@ def main():
         x = float(x)
         if not 0 < x < 1.0:
             raise ValueError("Scale factors must lie on the interval [0, 1]")
+        return x
 
     def natural_int(x):
         x = int(x)
         if x < 0:
             raise ValueError("natural numbers must be positive or zero")
+        return x
+
+    parser.add_argument(
+        "--tracks", action="extend", type=splat_pattern, nargs="+", required=True
+    )
 
     parser.add_argument(
         "--read-duration",
@@ -276,7 +279,8 @@ def main():
     embeddings = embedder.predict(spectrograms, batch_size=8)
     # A_min = tf.reduce_min(A)
     # A = tf.math.divide_no_nan(A - A_min, tf.reduce_max(A) - A_min)
-    bpms = np.array([detect_bpm(y, sr) for y, sr in zip(ys, srs)], dtype=np.float32)
+    bpms = [detect_bpm(y, sr) for y, sr in zip(ys, srs)]
+    bpms = tf.convert_to_tensor(bpms, dtype=tf.float32)
     bpm_distance = 1 - standardize(bpms[:, None] - bpms[None, :])
     bpm_distance = tf.clip_by_value(bpm_distance, args.max_tempo_penalty, 1.0)
     bpm_distance = tf.cast(bpm_distance, tf.float32)

@@ -1,6 +1,7 @@
 import ctypes
-from os.path import abspath
+from os.path import abspath, dirname
 
+import aubio
 import av
 import numpy as np
 import pythoncom
@@ -8,7 +9,20 @@ import tensorflow as tf
 import win32clipboard
 from resampy import resample
 
-from spectrograms import log_mel_spectrogram
+
+def detect_bpm(y, sr, beat_detector=None):
+    if beat_detector is None:
+        beat_detector = aubio.tempo(method="specdiff", samplerate=sr)
+    buf_len = beat_detector.hop_size
+    beats = []
+    while len(y) > buf_len:
+        samples = y[:buf_len]
+        is_beat = beat_detector(samples)
+        if is_beat:
+            beats.append(beat_detector.get_last_s())
+        y = y[buf_len + 1 :]
+    bpms = 60 / np.diff(beats)
+    return np.median(bpms)
 
 
 def decode_k_samples(container, audio, k, silence=1e-4):
@@ -29,7 +43,7 @@ def partial_decode(container, duration, num_segments=3, silence=1e-4):
     segments = []
     segment_len = int(tot_samples / num_segments)
     cursor = 0
-    while cursor < container.duration:
+    while cursor < container.duration and len(segments) < num_segments:
         container.seek(cursor)
         segment = list(decode_k_samples(container, audio, segment_len, silence))
         if segment:
@@ -40,11 +54,14 @@ def partial_decode(container, duration, num_segments=3, silence=1e-4):
     y_max = -np.inf
     y_min = np.inf
     for i, segment in enumerate(segments):
+        if i >= num_segments - 1:
+            break
         if len(segment) > 0:
             y_max = max(y_max, segment.max())
             y_min = min(y_min, segment.min())
-        segment = np.pad(segment, (i * segment_len, 0))
-        segment = np.pad(segment, (0, len(y) - len(segment)))
+        lpad = i * segment_len
+        rpad = max(0, len(y) - len(segment) - lpad)
+        segment = np.pad(segment, (lpad, rpad))
         segment /= num_segments
         y += segment
     target_sr = int(sr / (len(y) / tot_samples) + 0.5)
@@ -88,12 +105,16 @@ def log_mel_spectrogram(
     return S
 
 
+def standardize(x, axis=None):
+    x_min = tf.reduce_min(x, axis)
+    x_max = tf.reduce_max(x, axis)
+    return (x - x_min) / (x_max - x_min)
+
+
 def distance_matrix(points):
-    D = points[:, None, :] - points[None, :, :]
-    D = tf.linalg.norm(D, axis=-1)
-    D_min = tf.reduce_min(D, axis=1)
-    D = (D - D_min) / (tf.reduce_max(D, axis=1) - D_min)
-    return D
+    points = tf.linalg.l2_normalize(points, axis=-1)
+    D = 1 - points @ np.transpose(points)
+    return standardize(D, axis=-1)
 
 
 def pagerank(A, alpha=0.85):
@@ -166,7 +187,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="./aurover.h5",
+        default=abspath(f"{dirname(__file__)}/aurover.h5"),
         type=tf.keras.models.load_model,
     )
 
@@ -178,7 +199,6 @@ def main():
         except:
             raise ValueError(f"{path} does not appear to be a multimedia container")
 
-    parser.add_argument("--edginess", default=0.15, type=float)
     parser.add_argument("--top-k", type=int, default=-1)
     parser.add_argument("--centroid", type=song_path, action="extend", nargs="*")
     parser.add_argument("--reduce", action="store_true", default=False)
@@ -223,7 +243,8 @@ def main():
         x = log_mel_spectrogram(y, sr, *image_shape)
         x = tf.expand_dims(x, axis=-1)
         x = tf.image.grayscale_to_rgb(x)
-        return x
+        bpm = detect_bpm(y, sr)
+        return x, bpm
 
     tf.config.run_functions_eagerly(True)
 
@@ -231,10 +252,13 @@ def main():
     ys = [np.pad(y, (0, pad_to - len(y))) for y in ys]
     ys = np.vstack(ys)
     sys.stderr.write("encoding spectrograms...\n")
-    spectrograms = tf.map_fn(
+    spectrograms, bpms = tf.map_fn(
         preprocess,
         (tf.stack(ys), tf.cast(tf.stack(srs), tf.float32)),
-        fn_output_signature=tf.TensorSpec(shape=(*image_shape, 3)),
+        fn_output_signature=(
+            tf.TensorSpec(shape=(*image_shape, 3)),
+            tf.TensorSpec(shape=()),
+        ),
     )
     sys.stderr.write("extracting dense features...\n")
     embeddings = embedder.predict(spectrograms, batch_size=8)
@@ -289,27 +313,25 @@ def main():
         centroids = embeddings[np.isin(tracks, args.centroid)]
         if args.reduce:
             centroids = tf.expand_dims(tf.reduce_mean(centroids, axis=0), axis=0)
-        order_scores = embeddings - centroids[:, None]
+        order_scores = embeddings * centroids[:, None]
         order_scores = tf.reduce_prod(tf.linalg.norm(order_scores, axis=-1), axis=0)
         track_order = tf.argsort(order_scores)
         track_order = track_order.numpy()
     else:
         track_order = track_centrality
 
-    rng = np.random.default_rng(seed=0)
-    edginess = args.edginess
-    for _ in range(int(edginess * len(r))):
-        i = int(rng.random() * (len(r) - 1))
-        j = int(rng.random() * (len(r) - 1))
-        track_order[i], track_order[j] = track_order[j], track_order[i]
-
     track_order = track_order[: args.top_k]
-    A = A[track_order][:, track_order]
-    tour, cost = solve_tsp_simulated_annealing(A)
+    interleaved = np.zeros_like(track_order, dtype=int)
+    from_front = track_order[: track_order // 2]
+    from_back = track_order[::-1][: len(track_order) - len(from_front)]
+    interleaved[0::2] = from_front
+    interleaved[1::2] = from_back
+    A = A[interleaved][:, interleaved]
+    tour, total_cost = solve_tsp_simulated_annealing(A)
     tracks = tracks[track_order[tour]]
     # clip_files(tracks[np.array(tour)])
-    if not sys.stdout.isatty():
-        sys.stdout.write("\n".join(tracks) + "\n")
+    sys.stdout.write("\n".join(tracks) + "\n")
+    sys.stderr.write("copying paths to clipboard...\n")
     clip_files(tracks)
     # if sys.stdout.isatty():
     # sys.stdout.write("\n".join(tracks) + "\n")

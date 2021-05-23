@@ -3,6 +3,7 @@ import re
 import socket
 from io import BytesIO
 from os import cpu_count, environ, path, utime
+from urllib.error import URLError
 
 import av
 import pythoncom
@@ -106,7 +107,7 @@ def download_many(link):
             while True:
                 try:
                     return download_one(track, on_progress, on_complete)
-                except (ConnectionError, TimeoutError, socket.timeout):
+                except (ConnectionError, URLError, TimeoutError, socket.timeout):
                     continue
 
         with futures.ThreadPoolExecutor() as pool:

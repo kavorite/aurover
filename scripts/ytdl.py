@@ -91,7 +91,7 @@ def download_one(link, on_progress, on_complete):
             dst = ocontainer.add_stream(template=src)
             dst.metadata.update(metadata)
             for pkt in icontainer.demux(src):
-                if pkt.dts is not None:
+                if pkt.dts is not None and pkt.stream == src:
                     pkt.stream = dst
                     ocontainer.mux(pkt)
 
